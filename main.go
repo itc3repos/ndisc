@@ -25,6 +25,7 @@ var (
 	mock           bool
 	debug          bool
 	unpriv         bool
+	hideDead       bool
 	tabIndex       = map[int]*port{}
 	tabAddr        = map[string]*port{}
 	privateBlocks  []*net.IPNet
@@ -47,8 +48,9 @@ func main() {
 	debug = os.Getenv("DEBUG") != ""
 	mock = os.Getenv("MOCK") != ""
 	unpriv = os.Getenv("UNPRIV") != ""
+	hideDead = os.Getenv("HIDE_DEAD") != ""
 
-	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v", debug, mock, unpriv)
+	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v HIDE_DEAD=%v", debug, mock, unpriv, hideDead)
 	log.Printf("Template: %s", templateFormat)
 
 	loadPrivate()
@@ -178,10 +180,14 @@ func workerPing(r result) {
 
 	pinger.SetPrivileged(!unpriv)
 
+	enable := func(res *result) {
+		res.Alive = true
+	}
+
 	pinger.OnRecv = func(pkt *ping.Packet) {
-		r.Alive = true
+		enable(&r)
 		if debug {
-			fmt.Printf("probe: alive: %s\n", r.Host)
+			log.Printf("ALIVE: host=%s pkts=%d result=%v", r.Host, pinger.PacketsRecv, &r)
 		}
 	}
 
@@ -192,11 +198,13 @@ func workerPing(r result) {
 	pinger.Count = 3
 	pinger.Interval = 300 * time.Millisecond
 	pinger.Timeout = time.Second
-	pinger.Debug = true
 	pinger.Run()
 }
 
 func showResult(r result) {
+	if hideDead && !r.Alive {
+		return
+	}
 	if err := templateResult.Execute(os.Stdout, r); err != nil {
 		log.Printf("showResult template error: %v", err)
 	}
