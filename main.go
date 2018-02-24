@@ -139,8 +139,8 @@ func probe(p *port, block net.IPNet, host net.IP) {
 		showHost(p, block, host, alive)
 	}
 
-	pinger.Count = 1
-	pinger.Interval = 500 * time.Millisecond
+	pinger.Count = 3
+	pinger.Interval = 300 * time.Millisecond
 	pinger.Timeout = time.Second
 	pinger.Debug = true
 	pinger.Run()
