@@ -2,6 +2,8 @@
 
 gobin=~/go/bin
 
+go get github.com/sparrc/go-ping
+
 gofmt -s -w *.go
 go tool fix *.go
 go tool vet .

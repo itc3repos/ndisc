@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/sparrc/go-ping"
 )
 
 var (
@@ -56,30 +58,24 @@ func isPrivate(n net.IPNet) bool {
 	return false
 }
 
-/*
-{ "data": [
-{ "{#DESC}" : "STT-3947-1-1", "{#INT}" : "GigabitEthernet0/2.2777", "{#IPCL}" : "189.126.193.25" },
-{ "{#DESC}" : "STT-3957-2-1", "{#INT}" : "GigabitEthernet0/1.7744", "{#IPCL}" : "189.126.139.31" },
-]}
-*/
 func show() {
 	log.Printf("RESULT:")
 
 	for _, p := range tabIndex {
 		if len(p.routeNet) > 0 {
 			for _, n := range p.routeNet {
-				showBlock(p.index, p.descr, p.alias, p.addr, p.mask, n)
+				showBlock(p, n)
 			}
 		} else {
 			pIP := net.ParseIP(p.addr)
 			pMask := net.IPMask(net.ParseIP(p.mask))
 			block := net.IPNet{IP: pIP, Mask: pMask}
-			showBlock(p.index, p.descr, p.alias, p.addr, p.mask, block)
+			showBlock(p, block)
 		}
 	}
 }
 
-func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
+func showBlock(p *port, block net.IPNet) {
 	if block.IP == nil {
 		return
 	}
@@ -88,16 +84,49 @@ func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
 
 	ones, _ := block.Mask.Size()
 	hosts := (1 << (32 - uint(ones))) - 3 // skip 3 = net, first host, broadcast
-	b := nextIP(block.IP, 2)              // skip net and first host
+	h := nextIP(block.IP, 2)              // skip net and first host
 	for i := 0; i < hosts; i++ {
 
 		if debug {
 			bits, _ := block.Mask.Size()
-			log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s", index, descr, alias, addr, mask, block.IP, bits, b)
+			log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, h)
 		}
 
-		b = nextIP(b, 1)
+		probe(p, block, h)
+
+		h = nextIP(h, 1)
 	}
+}
+
+func probe(p *port, block net.IPNet, host net.IP) {
+	pinger, err := ping.NewPinger(host.String())
+	if err != nil {
+		log.Printf("probe error: host=%s: %v", host, err)
+		showHost(p, block, host, false)
+		return
+	}
+
+	pinger.OnRecv = func(pkt *ping.Packet) {
+		showHost(p, block, host, true)
+	}
+
+	pinger.OnFinish = func(stats *ping.Statistics) {
+		showHost(p, block, host, false)
+	}
+
+	pinger.Count = 1
+	pinger.Run()
+}
+
+/*
+{ "data": [
+{ "{#DESC}" : "STT-3947-1-1", "{#INT}" : "GigabitEthernet0/2.2777", "{#IPCL}" : "189.126.193.25" },
+{ "{#DESC}" : "STT-3957-2-1", "{#INT}" : "GigabitEthernet0/1.7744", "{#IPCL}" : "189.126.139.31" },
+]}
+*/
+func showHost(p *port, block net.IPNet, host net.IP, alive bool) {
+	bits, _ := block.Mask.Size()
+	fmt.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s alive=%v", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, host, alive)
 }
 
 func nextIP(ip net.IP, inc uint) net.IP {
