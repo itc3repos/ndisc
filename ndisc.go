@@ -19,6 +19,7 @@ import (
 
 const (
 	defaultTemplateFormat = "index={{.Index}} descr=[{{.Descr}}] alias=[{{.Alias}}] addr={{.Addr}}/{{.Mask}} block={{.Block}} host={{.Host}} alive={{.Alive}}"
+	version               = "0.1"
 )
 
 var (
@@ -26,6 +27,7 @@ var (
 	debug          bool
 	unpriv         bool
 	hideDead       bool
+	workers        = 10
 	tabIndex       = map[int]*port{}
 	tabAddr        = map[string]*port{}
 	privateBlocks  []*net.IPNet
@@ -35,10 +37,14 @@ var (
 
 func main() {
 
+	me := os.Args[0]
+
 	if len(os.Args) < 3 {
-		fmt.Printf("usage: %s router community [template]\n", os.Args[0])
+		fmt.Printf("usage: %s router community [template]\n", me)
 		return
 	}
+
+	log.Printf("%s version %s", me, version)
 
 	templateFormat := defaultTemplateFormat
 	if len(os.Args) > 3 {
@@ -50,7 +56,21 @@ func main() {
 	unpriv = os.Getenv("UNPRIV") != ""
 	hideDead = os.Getenv("HIDE_DEAD") != ""
 
-	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v HIDE_DEAD=%v", debug, mock, unpriv, hideDead)
+	if w := os.Getenv("WORKERS"); w != "" {
+		v, errW := strconv.Atoi(w)
+		if errW != nil {
+			log.Printf("bad workers: %v", errW)
+			return
+		}
+		wMax := 1000
+		if v < 1 || v > wMax {
+			log.Printf("workers out-of-range (1..%d): %d", wMax, v)
+			return
+		}
+		workers = v
+	}
+
+	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v HIDE_DEAD=%v WORKERS=%d", debug, mock, unpriv, hideDead, workers)
 	log.Printf("Template: %s", templateFormat)
 
 	loadPrivate()
@@ -154,8 +174,6 @@ type result struct {
 }
 
 func spawnWorkers(c <-chan result) {
-	const workers = 10
-
 	log.Printf("spawning %d workers", workers)
 
 	for i := 0; i < workers; i++ {
