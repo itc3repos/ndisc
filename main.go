@@ -11,31 +11,48 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"text/template"
+	"time"
 
-	"github.com/sparrc/go-ping"
+	"github.com/udhos/go-ping"
+)
+
+const (
+	defaultTemplateFormat = "index={{.Index}} descr=[{{.Descr}}] alias=[{{.Alias}}] addr={{.Addr}}/{{.Mask}} block={{.Block}} host={{.Host}} alive={{.Alive}}"
 )
 
 var (
-	mock          bool
-	debug         bool
-	tabIndex      = map[int]*port{}
-	tabAddr       = map[string]*port{}
-	privateBlocks []*net.IPNet
+	mock           bool
+	debug          bool
+	unpriv         bool
+	tabIndex       = map[int]*port{}
+	tabAddr        = map[string]*port{}
+	privateBlocks  []*net.IPNet
+	templateResult *template.Template
 )
 
 func main() {
 
-	if len(os.Args) != 3 {
-		fmt.Printf("usage: %s router community\n", os.Args[0])
+	if len(os.Args) < 3 {
+		fmt.Printf("usage: %s router community [template]\n", os.Args[0])
 		return
+	}
+
+	templateFormat := defaultTemplateFormat
+	if len(os.Args) > 3 {
+		templateFormat = os.Args[3]
 	}
 
 	debug = os.Getenv("DEBUG") != ""
 	mock = os.Getenv("MOCK") != ""
+	unpriv = os.Getenv("UNPRIV") != ""
 
-	log.Printf("DEBUG=%v MOCK=%v", debug, mock)
+	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v", debug, mock, unpriv)
+	log.Printf("Template: %s", templateFormat)
 
 	loadPrivate()
+
+	templateResult = template.Must(template.New("templateFormat").Parse(templateFormat))
 
 	scan(os.Args[1], os.Args[2])
 
@@ -76,6 +93,7 @@ func show() {
 }
 
 func showBlock(p *port, block net.IPNet) {
+
 	if block.IP == nil {
 		return
 	}
@@ -106,27 +124,61 @@ func probe(p *port, block net.IPNet, host net.IP) {
 		return
 	}
 
+	pinger.SetPrivileged(!unpriv)
+
+	var alive bool
+
 	pinger.OnRecv = func(pkt *ping.Packet) {
-		showHost(p, block, host, true)
+		alive = true
+		if debug {
+			fmt.Printf("probe: alive: %s\n", host)
+		}
 	}
 
 	pinger.OnFinish = func(stats *ping.Statistics) {
-		showHost(p, block, host, false)
+		showHost(p, block, host, alive)
 	}
 
 	pinger.Count = 1
+	pinger.Interval = 500 * time.Millisecond
+	pinger.Timeout = time.Second
+	pinger.Debug = true
 	pinger.Run()
 }
 
-/*
-{ "data": [
-{ "{#DESC}" : "STT-3947-1-1", "{#INT}" : "GigabitEthernet0/2.2777", "{#IPCL}" : "189.126.193.25" },
-{ "{#DESC}" : "STT-3957-2-1", "{#INT}" : "GigabitEthernet0/1.7744", "{#IPCL}" : "189.126.139.31" },
-]}
-*/
+type result struct {
+	Index int
+	Descr string
+	Alias string
+	Addr  string
+	Mask  string
+
+	Block string
+	Host  net.IP
+	Alive bool
+}
+
 func showHost(p *port, block net.IPNet, host net.IP, alive bool) {
+
 	bits, _ := block.Mask.Size()
-	fmt.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s alive=%v", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, host, alive)
+
+	r := result{
+		Index: p.index,
+		Descr: p.descr,
+		Alias: p.alias,
+		Addr:  p.addr,
+		Mask:  p.mask,
+		Block: block.IP.String() + "/" + strconv.Itoa(bits),
+		Host:  host,
+		Alive: alive,
+	}
+
+	//fmt.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s alive=%v\n", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, host, alive)
+
+	if err := templateResult.Execute(os.Stdout, r); err != nil {
+		log.Printf("showHost template error: %v", err)
+	}
+	fmt.Println()
 }
 
 func nextIP(ip net.IP, inc uint) net.IP {
