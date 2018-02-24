@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -33,6 +34,7 @@ var (
 	privateBlocks  []*net.IPNet
 	templateResult *template.Template
 	workChannel    = make(chan result)
+	outputLock     sync.Mutex
 )
 
 func main() {
@@ -225,10 +227,12 @@ func showResult(r result) {
 	if hideDead && !r.Alive {
 		return
 	}
+	outputLock.Lock()
 	if err := templateResult.Execute(os.Stdout, r); err != nil {
 		log.Printf("showResult template error: %v", err)
 	}
 	fmt.Println()
+	outputLock.Unlock()
 }
 
 func nextIP(ip net.IP, inc uint) net.IP {
