@@ -21,22 +21,18 @@ var (
 )
 
 func main() {
+
 	if len(os.Args) != 3 {
-		fmt.Printf("usage: ndisc router community\n")
+		fmt.Printf("usage: %s router community\n", os.Args[0])
 		return
 	}
 
-	if os.Getenv("DEBUG") != "" {
-		debug = true
-	}
+	debug = os.Getenv("DEBUG") != ""
+	mock = os.Getenv("MOCK") != ""
 
-	if os.Getenv("MOCK") != "" {
-		mock = true
-	}
+	log.Printf("DEBUG=%v MOCK=%v", debug, mock)
 
-	log.Printf("MOCK=%v", mock)
-
-	scan(os.Args[1], os.Args[1])
+	scan(os.Args[1], os.Args[2])
 
 	show()
 }
@@ -70,7 +66,8 @@ func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
 	}
 
 	if debug {
-		log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s]", index, descr, alias, addr, mask, block)
+		bits, _ := block.Mask.Size()
+		log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d]", index, descr, alias, addr, mask, block.IP, bits)
 	}
 }
 
@@ -220,11 +217,11 @@ func handleRoute(line, prefix string) {
 	routeNet := strings.Join(s[0:4], ".")
 	routeMask := strings.Join(s[4:8], ".")
 	rIP := net.ParseIP(routeNet)
-	rMask := net.IPMask(net.ParseIP(routeMask))
+	rMask := net.IPMask(net.ParseIP(routeMask).To4())
 	rNet := net.IPNet{IP: rIP, Mask: rMask}
 
 	if debug {
-		log.Printf("route=[%s] mask=[%s] next=[%s]", routeNet, routeMask, next)
+		log.Printf("route=[%s] mask=[%s] ipmask=[%s] next=[%s]", routeNet, routeMask, rMask, next)
 	}
 
 	nh := net.ParseIP(next)
@@ -451,4 +448,5 @@ const bufMask = `RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.25
 
 const bufRoute = `IP-FORWARD-MIB::ipCidrRouteNextHop.189.126.193.24.255.255.255.248.0.192.168.208.190 = IpAddress: 192.168.208.190
 IP-FORWARD-MIB::ipCidrRouteNextHop.1.1.1.0.255.255.255.0.0.192.168.208.190 = IpAddress: 192.168.208.190
+IP-FORWARD-MIB::ipCidrRouteNextHop.10.0.0.0.255.255.255.0.0.192.168.208.190 = IpAddress: 192.168.208.190
 `
