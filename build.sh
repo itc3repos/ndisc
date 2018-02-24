@@ -2,7 +2,7 @@
 
 gobin=~/go/bin
 
-go get github.com/udhos/go-ping
+go get -u github.com/udhos/go-ping
 
 gofmt -s -w *.go
 go tool fix *.go
