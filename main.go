@@ -14,10 +14,11 @@ import (
 )
 
 var (
-	mock     bool
-	debug    bool
-	tabIndex = map[int]*port{}
-	tabAddr  = map[string]*port{}
+	mock          bool
+	debug         bool
+	tabIndex      = map[int]*port{}
+	tabAddr       = map[string]*port{}
+	privateBlocks []*net.IPNet
 )
 
 func main() {
@@ -32,9 +33,27 @@ func main() {
 
 	log.Printf("DEBUG=%v MOCK=%v", debug, mock)
 
+	loadPrivate()
+
 	scan(os.Args[1], os.Args[2])
 
 	show()
+}
+
+func loadPrivate() {
+	_, p0, _ := net.ParseCIDR("10.0.0.0/8")
+	_, p1, _ := net.ParseCIDR("172.16.0.0/12")
+	_, p2, _ := net.ParseCIDR("192.168.0.0/16")
+	privateBlocks = []*net.IPNet{p0, p1, p2}
+}
+
+func isPrivate(n net.IPNet) bool {
+	for _, p := range privateBlocks {
+		if p.Contains(n.IP) {
+			return true
+		}
+	}
+	return false
 }
 
 /*
@@ -222,6 +241,11 @@ func handleRoute(line, prefix string) {
 
 	if debug {
 		log.Printf("route=[%s] mask=[%s] ipmask=[%s] next=[%s]", routeNet, routeMask, rMask, next)
+	}
+
+	if isPrivate(rNet) {
+		// discard private routes
+		return
 	}
 
 	nh := net.ParseIP(next)
