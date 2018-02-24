@@ -84,10 +84,31 @@ func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
 		return
 	}
 
-	if debug {
-		bits, _ := block.Mask.Size()
-		log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d]", index, descr, alias, addr, mask, block.IP, bits)
+	// scan all addresses from block
+
+	ones, _ := block.Mask.Size()
+	hosts := (1 << (32 - uint(ones))) - 3 // skip 3 = net, first host, broadcast
+	b := nextIP(block.IP, 2)              // skip net and first host
+	for i := 0; i < hosts; i++ {
+
+		if debug {
+			bits, _ := block.Mask.Size()
+			log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s", index, descr, alias, addr, mask, block.IP, bits, b)
+		}
+
+		b = nextIP(b, 1)
 	}
+}
+
+func nextIP(ip net.IP, inc uint) net.IP {
+	i := ip.To4()
+	v := uint(i[0])<<24 + uint(i[1])<<16 + uint(i[2])<<8 + uint(i[3])
+	v += inc
+	v3 := byte(v & 0x000000FF)
+	v2 := byte((v >> 8) & 0x000000FF)
+	v1 := byte((v >> 16) & 0x000000FF)
+	v0 := byte((v >> 24) & 0x000000FF)
+	return net.IPv4(v0, v1, v2, v3)
 }
 
 func scan(router, community string) {
