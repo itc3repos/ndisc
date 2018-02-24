@@ -88,11 +88,15 @@ func show() {
 			}
 		} else {
 			pIP := net.ParseIP(p.addr)
-			pMask := net.IPMask(net.ParseIP(p.mask))
+			pMask := parseMask(p.mask)
 			block := net.IPNet{IP: pIP, Mask: pMask}
 			showBlock(p, block)
 		}
 	}
+}
+
+func parseMask(mask string) net.IPMask {
+	return net.IPMask(net.ParseIP(mask).To4())
 }
 
 func showBlock(p *port, block net.IPNet) {
@@ -356,7 +360,7 @@ func handleRoute(line, prefix string) {
 	routeNet := strings.Join(s[0:4], ".")
 	routeMask := strings.Join(s[4:8], ".")
 	rIP := net.ParseIP(routeNet)
-	rMask := net.IPMask(net.ParseIP(routeMask).To4())
+	rMask := parseMask(routeMask)
 	rNet := net.IPNet{IP: rIP, Mask: rMask}
 
 	if debug {
@@ -372,7 +376,7 @@ func handleRoute(line, prefix string) {
 
 	for _, p := range tabIndex {
 		pIP := net.ParseIP(p.addr)
-		pMask := net.IPMask(net.ParseIP(p.mask))
+		pMask := parseMask(p.mask)
 		pNet := net.IPNet{IP: pIP, Mask: pMask}
 
 		if pNet.Contains(nh) {
