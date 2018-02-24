@@ -29,6 +29,7 @@ var (
 	tabAddr        = map[string]*port{}
 	privateBlocks  []*net.IPNet
 	templateResult *template.Template
+	workChannel    = make(chan result)
 )
 
 func main() {
@@ -52,9 +53,11 @@ func main() {
 
 	loadPrivate()
 
-	templateResult = template.Must(template.New("templateFormat").Parse(templateFormat))
-
 	scan(os.Args[1], os.Args[2])
+
+	spawnWorkers(workChannel)
+
+	templateResult = template.Must(template.New("templateFormat").Parse(templateFormat))
 
 	show()
 }
@@ -110,40 +113,26 @@ func showBlock(p *port, block net.IPNet) {
 			log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, h)
 		}
 
-		probe(p, block, h)
+		probeWorker(p, block, h)
 
 		h = nextIP(h, 1)
 	}
 }
 
-func probe(p *port, block net.IPNet, host net.IP) {
-	pinger, err := ping.NewPinger(host.String())
-	if err != nil {
-		log.Printf("probe error: host=%s: %v", host, err)
-		showHost(p, block, host, false)
-		return
+func probeWorker(p *port, block net.IPNet, host net.IP) {
+	bits, _ := block.Mask.Size()
+
+	r := result{
+		Index: p.index,
+		Descr: p.descr,
+		Alias: p.alias,
+		Addr:  p.addr,
+		Mask:  p.mask,
+		Block: block.IP.String() + "/" + strconv.Itoa(bits),
+		Host:  host,
 	}
 
-	pinger.SetPrivileged(!unpriv)
-
-	var alive bool
-
-	pinger.OnRecv = func(pkt *ping.Packet) {
-		alive = true
-		if debug {
-			fmt.Printf("probe: alive: %s\n", host)
-		}
-	}
-
-	pinger.OnFinish = func(stats *ping.Statistics) {
-		showHost(p, block, host, alive)
-	}
-
-	pinger.Count = 3
-	pinger.Interval = 300 * time.Millisecond
-	pinger.Timeout = time.Second
-	pinger.Debug = true
-	pinger.Run()
+	workChannel <- r
 }
 
 type result struct {
@@ -158,25 +147,54 @@ type result struct {
 	Alive bool
 }
 
-func showHost(p *port, block net.IPNet, host net.IP, alive bool) {
+func spawnWorkers(c <-chan result) {
+	const workers = 10
 
-	bits, _ := block.Mask.Size()
+	log.Printf("spawning %d workers", workers)
 
-	r := result{
-		Index: p.index,
-		Descr: p.descr,
-		Alias: p.alias,
-		Addr:  p.addr,
-		Mask:  p.mask,
-		Block: block.IP.String() + "/" + strconv.Itoa(bits),
-		Host:  host,
-		Alive: alive,
+	for i := 0; i < workers; i++ {
+		go worker(c)
+	}
+}
+
+func worker(c <-chan result) {
+	for {
+		r := <-c
+		workerPing(r)
+	}
+}
+
+func workerPing(r result) {
+	pinger, err := ping.NewPinger(r.Host.String())
+	if err != nil {
+		log.Printf("probe error: host=%s: %v", r.Host, err)
+		showResult(r)
+		return
 	}
 
-	//fmt.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s/%d] host=%s alive=%v\n", p.index, p.descr, p.alias, p.addr, p.mask, block.IP, bits, host, alive)
+	pinger.SetPrivileged(!unpriv)
 
+	pinger.OnRecv = func(pkt *ping.Packet) {
+		r.Alive = true
+		if debug {
+			fmt.Printf("probe: alive: %s\n", r.Host)
+		}
+	}
+
+	pinger.OnFinish = func(stats *ping.Statistics) {
+		showResult(r)
+	}
+
+	pinger.Count = 3
+	pinger.Interval = 300 * time.Millisecond
+	pinger.Timeout = time.Second
+	pinger.Debug = true
+	pinger.Run()
+}
+
+func showResult(r result) {
 	if err := templateResult.Execute(os.Stdout, r); err != nil {
-		log.Printf("showHost template error: %v", err)
+		log.Printf("showResult template error: %v", err)
 	}
 	fmt.Println()
 }
