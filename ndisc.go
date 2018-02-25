@@ -229,21 +229,24 @@ func workerPing(r result) {
 }
 
 func showResult(r result) {
-	if hideDead && !r.Alive {
-		return
-	}
 
-	// check if we need to skip dup answers for same port
+	// check if we need to skip dup answers for port with one alive answer
 	if hideDup {
 		// will skip dup answers
-		var foundOne bool // was there any previous answer?
+		var foundOne bool // was there any previous alive answer?
 		r.p.dupLock.Lock()
 		foundOne = r.p.dupAlive
-		r.p.dupAlive = true // record current answer
+		if r.Alive {
+			r.p.dupAlive = true // record current answer if alive
+		}
 		r.p.dupLock.Unlock()
 		if foundOne {
 			return // skip since this is a dup answer
 		}
+	}
+
+	if hideDead && !r.Alive {
+		return
 	}
 
 	outputLock.Lock()
