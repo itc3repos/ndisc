@@ -29,6 +29,7 @@ var (
 	debug          bool
 	unpriv         bool
 	hideDead       bool
+	hideDup        bool
 	tabIndex       = map[int]*port{}
 	tabAddr        = map[string]*port{}
 	privateBlocks  []*net.IPNet
@@ -57,6 +58,7 @@ func main() {
 	mock = os.Getenv("MOCK") != ""
 	unpriv = os.Getenv("UNPRIV") != ""
 	hideDead = os.Getenv("HIDE_DEAD") != ""
+	hideDup = os.Getenv("HIDE_DUP") != ""
 
 	workers := 20
 	if w := os.Getenv("WORKERS"); w != "" {
@@ -73,7 +75,7 @@ func main() {
 		workers = v
 	}
 
-	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v HIDE_DEAD=%v WORKERS=%d", debug, mock, unpriv, hideDead, workers)
+	log.Printf("Environment: DEBUG=%v MOCK=%v UNPRIV=%v HIDE_DEAD=%v HIDE_DUP=%v WORKERS=%d", debug, mock, unpriv, hideDead, hideDup, workers)
 	log.Printf("Template: %s", templateFormat)
 
 	loadPrivate()
@@ -159,6 +161,7 @@ func probeWorker(p *port, block net.IPNet, host net.IP) {
 		Mask:  p.mask,
 		Block: block.IP.String() + "/" + strconv.Itoa(bits),
 		Host:  host,
+		p:     p,
 	}
 
 	workChannel <- r
@@ -174,6 +177,8 @@ type result struct {
 	Block string
 	Host  net.IP
 	Alive bool
+
+	p *port // backpointer
 }
 
 func spawnWorkers(workers int, c <-chan result) {
@@ -227,6 +232,20 @@ func showResult(r result) {
 	if hideDead && !r.Alive {
 		return
 	}
+
+	// check if we need to skip dup answers for same port
+	if hideDup {
+		// will skip dup answers
+		var foundOne bool // was there any previous answer?
+		r.p.dupLock.Lock()
+		foundOne = r.p.dupAlive
+		r.p.dupAlive = true // record current answer
+		r.p.dupLock.Unlock()
+		if foundOne {
+			return // skip since this is a dup answer
+		}
+	}
+
 	outputLock.Lock()
 	if err := templateResult.Execute(os.Stdout, r); err != nil {
 		log.Printf("showResult template error: %v", err)
@@ -239,10 +258,10 @@ func nextIP(ip net.IP, inc uint) net.IP {
 	i := ip.To4()
 	v := uint(i[0])<<24 + uint(i[1])<<16 + uint(i[2])<<8 + uint(i[3])
 	v += inc
-	v3 := byte(v & 0x000000FF)
-	v2 := byte((v >> 8) & 0x000000FF)
-	v1 := byte((v >> 16) & 0x000000FF)
-	v0 := byte((v >> 24) & 0x000000FF)
+	v3 := byte(v & 0xFF)
+	v2 := byte((v >> 8) & 0xFF)
+	v1 := byte((v >> 16) & 0xFF)
+	v0 := byte((v >> 24) & 0xFF)
 	return net.IPv4(v0, v1, v2, v3)
 }
 
@@ -261,6 +280,9 @@ type port struct {
 	addr     string
 	mask     string
 	routeNet []net.IPNet
+
+	dupLock  sync.Mutex
+	dupAlive bool
 }
 
 type handleFunc func(line, prefix string)
@@ -615,15 +637,23 @@ RFC1213-MIB::ifDescr.6 = STRING: "Loopback0"
 RFC1213-MIB::ifDescr.10 = STRING: "GigabitEthernet0/1.3487"
 RFC1213-MIB::ifDescr.11 = STRING: "GigabitEthernet0/1.3488"
 RFC1213-MIB::ifDescr.31 = STRING: "GigabitEthernet0/2.2777"
+RFC1213-MIB::ifDescr.34 = STRING: "VLAN_2723"
+RFC1213-MIB::ifDescr.700 = STRING: "ae1.3000"
 `
 
 const bufAlias = `IF-MIB::ifAlias.31 = STRING: "STT-3947-1-1"
+IF-MIB::ifAlias.34 = STRING: "STT-4288-1-1"
+IF-MIB::ifAlias.700 = STRING: "STT-4891-3-1"
 `
 
 const bufAddr = `RFC1213-MIB::ipAdEntIfIndex.192.168.208.189 = INTEGER: 31
+RFC1213-MIB::ipAdEntIfIndex.200.49.48.9 = INTEGER: 34
+RFC1213-MIB::ipAdEntIfIndex.200.49.57.161 = INTEGER: 700
 `
 
 const bufMask = `RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.255.255.252
+RFC1213-MIB::ipAdEntNetMask.200.49.57.161 = IpAddress: 255.255.255.224
+RFC1213-MIB::ipAdEntNetMask.200.49.48.9 = IpAddress: 255.255.255.248
 `
 
 const bufRoute = `IP-FORWARD-MIB::ipCidrRouteNextHop.189.126.193.24.255.255.255.248.0.192.168.208.190 = IpAddress: 192.168.208.190
