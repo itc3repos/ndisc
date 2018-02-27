@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -13,8 +14,10 @@ import (
 )
 
 var (
-	mock  bool
-	debug bool
+	mock     bool
+	debug    bool
+	tabIndex = map[int]*port{}
+	tabAddr  = map[string]*port{}
 )
 
 func main() {
@@ -34,23 +37,51 @@ func main() {
 	log.Printf("MOCK=%v", mock)
 
 	scan(os.Args[1], os.Args[1])
+
+	show()
+}
+
+func show() {
+	log.Printf("RESULT:")
+
+	for _, p := range tabIndex {
+		if len(p.routeNet) > 0 {
+			for _, n := range p.routeNet {
+				showBlock(p.index, p.descr, p.alias, p.addr, p.mask, n)
+			}
+		} else {
+			pIP := net.ParseIP(p.addr)
+			pMask := net.IPMask(net.ParseIP(p.mask))
+			block := net.IPNet{IP: pIP, Mask: pMask}
+			showBlock(p.index, p.descr, p.alias, p.addr, p.mask, block)
+		}
+	}
+}
+
+func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
+	if block.IP == nil {
+		return
+	}
+
+	log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s]", index, descr, alias, addr, mask, block)
 }
 
 func scan(router, community string) {
 	scanLines("descr", router, community, "RFC1213-MIB::ifDescr", handleDescr)
 	scanLines("alias", router, community, "IF-MIB::ifAlias", handleAlias)
 	scanLines("addr", router, community, "RFC1213-MIB::ipAdEntIfIndex", handleAddr)
+	scanLines("mask", router, community, "RFC1213-MIB::ipAdEntNetMask", handleMask)
+	scanLines("route", router, community, "IP-FORWARD-MIB::ipCidrRouteNextHop", handleRoute)
 }
 
 type port struct {
-	index int
-	descr string
-	alias string
-	addr  string
-	mask  string
+	index    int
+	descr    string
+	alias    string
+	addr     string
+	mask     string
+	routeNet []net.IPNet
 }
-
-var tabIndex = map[int]*port{}
 
 type handleFunc func(line, prefix string)
 
@@ -142,8 +173,66 @@ func handleAddr(line, prefix string) {
 
 	p.addr = addr
 
+	tabAddr[addr] = p
+
 	if debug {
 		log.Printf("index=%d addr=[%s]", index, addr)
+	}
+}
+
+func handleMask(line, prefix string) {
+	addr, mask, err := extractAddrAddr(line, prefix)
+	if err != nil {
+		log.Printf("handleMask: %v", err)
+		return
+	}
+
+	p, found := tabAddr[addr]
+	if !found {
+		log.Printf("handleMask: not found: addr=[%s]", addr)
+		return
+	}
+
+	p.mask = mask
+
+	if debug {
+		log.Printf("index=%d addr=[%s] mask=[%s]", p.index, addr, mask)
+	}
+}
+
+func handleRoute(line, prefix string) {
+	route, next, err := extractAddrAddr(line, prefix)
+	if err != nil {
+		log.Printf("handleRoute: %v", err)
+		return
+	}
+
+	s := strings.Split(route, ".")
+
+	routeNet := strings.Join(s[0:4], ".")
+	routeMask := strings.Join(s[4:8], ".")
+	rIP := net.ParseIP(routeNet)
+	rMask := net.IPMask(net.ParseIP(routeMask))
+	rNet := net.IPNet{IP: rIP, Mask: rMask}
+
+	if debug {
+		log.Printf("route=[%s] mask=[%s] next=[%s]", routeNet, routeMask, next)
+	}
+
+	nh := net.ParseIP(next)
+
+	for _, p := range tabIndex {
+		pIP := net.ParseIP(p.addr)
+		pMask := net.IPMask(net.ParseIP(p.mask))
+		pNet := net.IPNet{IP: pIP, Mask: pMask}
+
+		if pNet.Contains(nh) {
+
+			p.routeNet = append(p.routeNet, rNet)
+			if debug {
+				log.Printf("index=%d route=[%s] mask=[%s] next=[%s]", p.index, routeNet, routeMask, next)
+			}
+		}
 	}
 }
 
@@ -214,7 +303,7 @@ func extractStringIndex(line, prefix string) (string, int, error) {
 
 	lastS := strings.LastIndexByte(suff, ' ')
 	if lastS < 0 {
-		return "", -1, fmt.Errorf("bad last quote: [%s]", suff)
+		return "", -1, fmt.Errorf("bad last space: [%s]", suff)
 	}
 
 	index, err := strconv.Atoi(suff[lastS+1:])
@@ -223,6 +312,40 @@ func extractStringIndex(line, prefix string) (string, int, error) {
 	}
 
 	return str, index, nil
+}
+
+// RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.255.255.252
+func extractAddrAddr(line, prefix string) (string, string, error) {
+
+	prefix += "."
+
+	line = strings.TrimSpace(line)
+
+	if debug {
+		log.Printf("extractStringIndex: [%s]", line)
+	}
+
+	if !strings.HasPrefix(line, prefix) {
+		return "", "", fmt.Errorf("prefix mismatch: [%s]", line)
+	}
+
+	suff := line[len(prefix):]
+
+	i := strings.IndexByte(suff, ' ')
+	if i < 0 {
+		return "", "", fmt.Errorf("bad ifindex: [%s]", suff)
+	}
+
+	addr1 := suff[:i]
+
+	lastS := strings.LastIndexByte(suff, ' ')
+	if lastS < 0 {
+		return "", "", fmt.Errorf("bad last space: [%s]", suff)
+	}
+
+	addr2 := suff[lastS+1:]
+
+	return addr1, addr2, nil
 }
 
 type walk struct {
@@ -287,6 +410,14 @@ func mockBuf(oid string) string {
 		return bufAddr
 	}
 
+	if strings.HasPrefix(oid, "RFC1213-MIB::ipAdEntNetMask") {
+		return bufMask
+	}
+
+	if strings.HasPrefix(oid, "IP-FORWARD-MIB::ipCidrRouteNextHop") {
+		return bufRoute
+	}
+
 	return "line1\nline2\nline3\n"
 }
 
@@ -307,8 +438,9 @@ const bufAlias = `IF-MIB::ifAlias.31 = STRING: "STT-3947-1-1"
 const bufAddr = `RFC1213-MIB::ipAdEntIfIndex.192.168.208.189 = INTEGER: 31
 `
 
-const bufAdMask = `RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.255.255.252
+const bufMask = `RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.255.255.252
 `
 
-const bufRouteNexthop = `IP-FORWARD-MIB::ipCidrRouteNextHop.189.126.193.24.255.255.255.248.0.192.168.208.190 = IpAddress: 192.168.208.190
+const bufRoute = `IP-FORWARD-MIB::ipCidrRouteNextHop.189.126.193.24.255.255.255.248.0.192.168.208.190 = IpAddress: 192.168.208.190
+IP-FORWARD-MIB::ipCidrRouteNextHop.1.1.1.0.255.255.255.0.0.192.168.208.190 = IpAddress: 192.168.208.190
 `
