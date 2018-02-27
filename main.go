@@ -41,6 +41,12 @@ func main() {
 	show()
 }
 
+/*
+{ "data": [
+{ "{#DESC}" : "STT-3947-1-1", "{#INT}" : "GigabitEthernet0/2.2777", "{#IPCL}" : "189.126.193.25" },
+{ "{#DESC}" : "STT-3957-2-1", "{#INT}" : "GigabitEthernet0/1.7744", "{#IPCL}" : "189.126.139.31" },
+]}
+*/
 func show() {
 	log.Printf("RESULT:")
 
@@ -63,7 +69,9 @@ func showBlock(index int, descr, alias, addr, mask string, block net.IPNet) {
 		return
 	}
 
-	log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s]", index, descr, alias, addr, mask, block)
+	if debug {
+		log.Printf("index=%d descr=[%s] alias=[%s] addr=[%s/%s] block=[%s]", index, descr, alias, addr, mask, block)
+	}
 }
 
 func scan(router, community string) {
