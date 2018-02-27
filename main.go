@@ -39,12 +39,15 @@ func main() {
 func scan(router, community string) {
 	scanLines("descr", router, community, "RFC1213-MIB::ifDescr", handleDescr)
 	scanLines("alias", router, community, "IF-MIB::ifAlias", handleAlias)
+	scanLines("addr", router, community, "RFC1213-MIB::ipAdEntIfIndex", handleAddr)
 }
 
 type port struct {
 	index int
 	descr string
 	alias string
+	addr  string
+	mask  string
 }
 
 var tabIndex = map[int]*port{}
@@ -122,6 +125,28 @@ func handleAlias(line, prefix string) {
 	}
 }
 
+func handleAddr(line, prefix string) {
+	addr, index, err := extractStringIndex(line, prefix)
+	if err != nil {
+		log.Printf("handleAddr: %v", err)
+		return
+	}
+
+	p, found := tabIndex[index]
+	if !found {
+		p = &port{
+			index: index,
+		}
+		tabIndex[index] = p
+	}
+
+	p.addr = addr
+
+	if debug {
+		log.Printf("index=%d addr=[%s]", index, addr)
+	}
+}
+
 func extractIndexString(line, prefix string) (int, string, error) {
 
 	prefix += "."
@@ -129,7 +154,7 @@ func extractIndexString(line, prefix string) (int, string, error) {
 	line = strings.TrimSpace(line)
 
 	if debug {
-		log.Printf("extract: [%s]", line)
+		log.Printf("extractIndexString: [%s]", line)
 	}
 
 	if !strings.HasPrefix(line, prefix) {
@@ -161,6 +186,43 @@ func extractIndexString(line, prefix string) (int, string, error) {
 	str := suff[firstQ+1 : lastQ]
 
 	return index, str, nil
+}
+
+// RFC1213-MIB::ipAdEntIfIndex.192.168.208.189 = INTEGER: 31
+func extractStringIndex(line, prefix string) (string, int, error) {
+
+	prefix += "."
+
+	line = strings.TrimSpace(line)
+
+	if debug {
+		log.Printf("extractStringIndex: [%s]", line)
+	}
+
+	if !strings.HasPrefix(line, prefix) {
+		return "", -1, fmt.Errorf("prefix mismatch: [%s]", line)
+	}
+
+	suff := line[len(prefix):]
+
+	i := strings.IndexByte(suff, ' ')
+	if i < 0 {
+		return "", -1, fmt.Errorf("bad ifindex: [%s]", suff)
+	}
+
+	str := suff[:i]
+
+	lastS := strings.LastIndexByte(suff, ' ')
+	if lastS < 0 {
+		return "", -1, fmt.Errorf("bad last quote: [%s]", suff)
+	}
+
+	index, err := strconv.Atoi(suff[lastS+1:])
+	if err != nil {
+		return "", -1, fmt.Errorf("bad ifindex value: %s [%s]", err, suff)
+	}
+
+	return str, index, nil
 }
 
 type walk struct {
@@ -221,6 +283,10 @@ func mockBuf(oid string) string {
 		return bufAlias
 	}
 
+	if strings.HasPrefix(oid, "RFC1213-MIB::ipAdEntIfIndex") {
+		return bufAddr
+	}
+
 	return "line1\nline2\nline3\n"
 }
 
@@ -236,4 +302,13 @@ RFC1213-MIB::ifDescr.31 = STRING: "GigabitEthernet0/2.2777"
 `
 
 const bufAlias = `IF-MIB::ifAlias.31 = STRING: "STT-3947-1-1"
+`
+
+const bufAddr = `RFC1213-MIB::ipAdEntIfIndex.192.168.208.189 = INTEGER: 31
+`
+
+const bufAdMask = `RFC1213-MIB::ipAdEntNetMask.192.168.208.189 = IpAddress: 255.255.255.252
+`
+
+const bufRouteNexthop = `IP-FORWARD-MIB::ipCidrRouteNextHop.189.126.193.24.255.255.255.248.0.192.168.208.190 = IpAddress: 192.168.208.190
 `
