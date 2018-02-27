@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 )
 
@@ -31,6 +32,13 @@ func main() {
 func scan(router, community string) {
 	scanDescr(router, community)
 }
+
+type port struct {
+	index int
+	descr string
+}
+
+var tabIndex = map[int]*port{}
 
 func scanDescr(router, community string) {
 
@@ -61,7 +69,50 @@ func scanDescr(router, community string) {
 
 func handleDescr(line string) {
 	line = strings.TrimSpace(line)
+
 	log.Printf("descr line: [%s]", line)
+
+	prefix := "RFC1213-MIB::ifDescr."
+	if !strings.HasPrefix(line, prefix) {
+		return
+	}
+
+	suff := line[len(prefix):]
+
+	i := strings.IndexByte(suff, ' ')
+	if i < 0 {
+		log.Printf("bad ifindex: [%s]", suff)
+		return
+	}
+
+	index, err := strconv.Atoi(suff[:i])
+	if err != nil {
+		log.Printf("bad ifindex value: %s [%s]", err, suff)
+		return
+	}
+
+	lastQ := strings.LastIndexByte(suff, '"')
+	if lastQ < 0 {
+		log.Printf("bad descr last quote: [%s]", suff)
+		return
+	}
+
+	firstQ := strings.LastIndexByte(suff[:lastQ], '"')
+	if firstQ < 0 {
+		log.Printf("bad descr first quote: [%s]", suff)
+		return
+	}
+
+	descr := suff[firstQ+1 : lastQ]
+
+	p := &port{
+		index: index,
+		descr: descr,
+	}
+
+	tabIndex[index] = p
+
+	log.Printf("index=%d descr=[%s]", index, descr)
 }
 
 type walk struct {
