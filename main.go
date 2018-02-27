@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 var debug bool
@@ -28,6 +29,10 @@ func main() {
 }
 
 func scan(router, community string) {
+	scanDescr(router, community)
+}
+
+func scanDescr(router, community string) {
 
 	w, errDescr := snmpwalk(router, community, "RFC1213-MIB::ifDescr")
 	if errDescr != nil {
@@ -38,15 +43,25 @@ func scan(router, community string) {
 	defer w.wait()
 
 	r := bufio.NewReader(w.reader)
-
 	for {
 		str, errRead := r.ReadString('\n')
+		if errRead == io.EOF {
+			if str != "" {
+				handleDescr(str)
+			}
+			break
+		}
 		if errRead != nil {
 			log.Printf("snmpwalk read error: %v", errRead)
 			break
 		}
-		log.Printf("snmpwalk read: [%s]", str)
+		handleDescr(str)
 	}
+}
+
+func handleDescr(line string) {
+	line = strings.TrimSpace(line)
+	log.Printf("descr line: [%s]", line)
 }
 
 type walk struct {
@@ -71,7 +86,8 @@ func snmpwalk(router, community, oid string) (*walk, error) {
 	w := walk{debug: debug}
 
 	if debug {
-		w.reader = bufio.NewReader(bytes.NewBufferString("debug string\nfim\n"))
+		buf := debugBuf(oid)
+		w.reader = bufio.NewReader(bytes.NewBufferString(buf))
 		return &w, nil
 	}
 
@@ -95,3 +111,23 @@ func snmpwalk(router, community, oid string) (*walk, error) {
 
 	return &w, nil
 }
+
+func debugBuf(oid string) string {
+
+	if strings.HasPrefix(oid, "RFC1213-MIB::ifDescr") {
+		return bufDescr
+	}
+
+	return "line1\nline2\nline3\n"
+}
+
+const bufDescr = `RFC1213-MIB::ifDescr.1 = STRING: "GigabitEthernet0/1"
+RFC1213-MIB::ifDescr.2 = STRING: "GigabitEthernet0/2"
+RFC1213-MIB::ifDescr.3 = STRING: "GigabitEthernet0/3"
+RFC1213-MIB::ifDescr.4 = STRING: "VoIP-Null0"
+RFC1213-MIB::ifDescr.5 = STRING: "Null0"
+RFC1213-MIB::ifDescr.6 = STRING: "Loopback0"
+RFC1213-MIB::ifDescr.10 = STRING: "GigabitEthernet0/1.3487"
+RFC1213-MIB::ifDescr.11 = STRING: "GigabitEthernet0/1.3488"
+RFC1213-MIB::ifDescr.31 = STRING: "GigabitEthernet0/2.2777"
+`
