@@ -38,16 +38,18 @@ func main() {
 
 func scan(router, community string) {
 	scanLines("descr", router, community, "RFC1213-MIB::ifDescr", handleDescr)
+	scanLines("alias", router, community, "IF-MIB::ifAlias", handleAlias)
 }
 
 type port struct {
 	index int
 	descr string
+	alias string
 }
 
 var tabIndex = map[int]*port{}
 
-type handleFunc func(line string)
+type handleFunc func(line, prefix string)
 
 func scanLines(label, router, community, prefix string, handler handleFunc) {
 
@@ -64,7 +66,7 @@ func scanLines(label, router, community, prefix string, handler handleFunc) {
 		str, errRead := r.ReadString('\n')
 		if errRead == io.EOF {
 			if str != "" {
-				handleDescr(str)
+				handler(str, prefix)
 			}
 			break
 		}
@@ -72,12 +74,12 @@ func scanLines(label, router, community, prefix string, handler handleFunc) {
 			log.Printf("snmpwalk %s read error: %v", label, errRead)
 			break
 		}
-		handler(str)
+		handler(str, prefix)
 	}
 }
 
-func handleDescr(line string) {
-	index, descr, err := extractIndexString(line, "RFC1213-MIB::ifDescr.")
+func handleDescr(line, prefix string) {
+	index, descr, err := extractIndexString(line, prefix)
 	if err != nil {
 		log.Printf("handleDescr: %v", err)
 		return
@@ -98,7 +100,32 @@ func handleDescr(line string) {
 	}
 }
 
+func handleAlias(line, prefix string) {
+	index, alias, err := extractIndexString(line, prefix)
+	if err != nil {
+		log.Printf("handleAlias: %v", err)
+		return
+	}
+
+	p, found := tabIndex[index]
+	if !found {
+		p = &port{
+			index: index,
+		}
+		tabIndex[index] = p
+	}
+
+	p.alias = alias
+
+	if debug {
+		log.Printf("index=%d alias=[%s]", index, alias)
+	}
+}
+
 func extractIndexString(line, prefix string) (int, string, error) {
+
+	prefix += "."
+
 	line = strings.TrimSpace(line)
 
 	if debug {
@@ -123,17 +150,17 @@ func extractIndexString(line, prefix string) (int, string, error) {
 
 	lastQ := strings.LastIndexByte(suff, '"')
 	if lastQ < 0 {
-		return -1, "", fmt.Errorf("bad descr last quote: [%s]", suff)
+		return -1, "", fmt.Errorf("bad last quote: [%s]", suff)
 	}
 
 	firstQ := strings.LastIndexByte(suff[:lastQ], '"')
 	if firstQ < 0 {
-		return -1, "", fmt.Errorf("bad descr first quote: [%s]", suff)
+		return -1, "", fmt.Errorf("bad first quote: [%s]", suff)
 	}
 
-	descr := suff[firstQ+1 : lastQ]
+	str := suff[firstQ+1 : lastQ]
 
-	return index, descr, nil
+	return index, str, nil
 }
 
 type walk struct {
@@ -190,6 +217,10 @@ func mockBuf(oid string) string {
 		return bufDescr
 	}
 
+	if strings.HasPrefix(oid, "IF-MIB::ifAlias") {
+		return bufAlias
+	}
+
 	return "line1\nline2\nline3\n"
 }
 
@@ -202,4 +233,7 @@ RFC1213-MIB::ifDescr.6 = STRING: "Loopback0"
 RFC1213-MIB::ifDescr.10 = STRING: "GigabitEthernet0/1.3487"
 RFC1213-MIB::ifDescr.11 = STRING: "GigabitEthernet0/1.3488"
 RFC1213-MIB::ifDescr.31 = STRING: "GigabitEthernet0/2.2777"
+`
+
+const bufAlias = `IF-MIB::ifAlias.31 = STRING: "STT-3947-1-1"
 `
