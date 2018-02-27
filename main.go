@@ -12,7 +12,10 @@ import (
 	"strings"
 )
 
-var debug bool
+var (
+	mock  bool
+	debug bool
+)
 
 func main() {
 	if len(os.Args) != 3 {
@@ -24,13 +27,17 @@ func main() {
 		debug = true
 	}
 
-	log.Printf("DEBUG=%v", debug)
+	if os.Getenv("MOCK") != "" {
+		mock = true
+	}
+
+	log.Printf("MOCK=%v", mock)
 
 	scan(os.Args[1], os.Args[1])
 }
 
 func scan(router, community string) {
-	scanDescr(router, community)
+	scanLines("descr", router, community, "RFC1213-MIB::ifDescr", handleDescr)
 }
 
 type port struct {
@@ -40,11 +47,13 @@ type port struct {
 
 var tabIndex = map[int]*port{}
 
-func scanDescr(router, community string) {
+type handleFunc func(line string)
 
-	w, errDescr := snmpwalk(router, community, "RFC1213-MIB::ifDescr")
+func scanLines(label, router, community, prefix string, handler handleFunc) {
+
+	w, errDescr := snmpwalk(router, community, prefix)
 	if errDescr != nil {
-		log.Printf("snmpwalk descr: %v", errDescr)
+		log.Printf("snmpwalk %s: %v", label, errDescr)
 		return
 	}
 
@@ -60,69 +69,81 @@ func scanDescr(router, community string) {
 			break
 		}
 		if errRead != nil {
-			log.Printf("snmpwalk read error: %v", errRead)
+			log.Printf("snmpwalk %s read error: %v", label, errRead)
 			break
 		}
-		handleDescr(str)
+		handler(str)
 	}
 }
 
 func handleDescr(line string) {
+	index, descr, err := extractIndexString(line, "RFC1213-MIB::ifDescr.")
+	if err != nil {
+		log.Printf("handleDescr: %v", err)
+		return
+	}
+
+	p, found := tabIndex[index]
+	if !found {
+		p = &port{
+			index: index,
+		}
+		tabIndex[index] = p
+	}
+
+	p.descr = descr
+
+	if debug {
+		log.Printf("index=%d descr=[%s]", index, descr)
+	}
+}
+
+func extractIndexString(line, prefix string) (int, string, error) {
 	line = strings.TrimSpace(line)
 
-	log.Printf("descr line: [%s]", line)
+	if debug {
+		log.Printf("extract: [%s]", line)
+	}
 
-	prefix := "RFC1213-MIB::ifDescr."
 	if !strings.HasPrefix(line, prefix) {
-		return
+		return -1, "", fmt.Errorf("prefix mismatch: [%s]", line)
 	}
 
 	suff := line[len(prefix):]
 
 	i := strings.IndexByte(suff, ' ')
 	if i < 0 {
-		log.Printf("bad ifindex: [%s]", suff)
-		return
+		return -1, "", fmt.Errorf("bad ifindex: [%s]", suff)
 	}
 
 	index, err := strconv.Atoi(suff[:i])
 	if err != nil {
-		log.Printf("bad ifindex value: %s [%s]", err, suff)
-		return
+		return -1, "", fmt.Errorf("bad ifindex value: %s [%s]", err, suff)
 	}
 
 	lastQ := strings.LastIndexByte(suff, '"')
 	if lastQ < 0 {
-		log.Printf("bad descr last quote: [%s]", suff)
-		return
+		return -1, "", fmt.Errorf("bad descr last quote: [%s]", suff)
 	}
 
 	firstQ := strings.LastIndexByte(suff[:lastQ], '"')
 	if firstQ < 0 {
-		log.Printf("bad descr first quote: [%s]", suff)
-		return
+		return -1, "", fmt.Errorf("bad descr first quote: [%s]", suff)
 	}
 
 	descr := suff[firstQ+1 : lastQ]
 
-	p := &port{
-		index: index,
-		descr: descr,
-	}
-
-	tabIndex[index] = p
-
-	log.Printf("index=%d descr=[%s]", index, descr)
+	return index, descr, nil
 }
 
 type walk struct {
 	cmd    *exec.Cmd
 	reader io.Reader
-	debug  bool
+	mock   bool
 }
 
 func (w *walk) wait() {
-	if w.debug {
+	if w.mock {
 		return
 	}
 
@@ -134,10 +155,10 @@ func (w *walk) wait() {
 
 func snmpwalk(router, community, oid string) (*walk, error) {
 
-	w := walk{debug: debug}
+	w := walk{mock: mock}
 
-	if debug {
-		buf := debugBuf(oid)
+	if mock {
+		buf := mockBuf(oid)
 		w.reader = bufio.NewReader(bytes.NewBufferString(buf))
 		return &w, nil
 	}
@@ -163,7 +184,7 @@ func snmpwalk(router, community, oid string) (*walk, error) {
 	return &w, nil
 }
 
-func debugBuf(oid string) string {
+func mockBuf(oid string) string {
 
 	if strings.HasPrefix(oid, "RFC1213-MIB::ifDescr") {
 		return bufDescr
