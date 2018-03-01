@@ -205,6 +205,7 @@ func workerPing(r result) {
 
 	pinger.OnRecv = func(pkt *ping.Packet) {
 		enable(&r)
+		pinger.Done()
 		if debug {
 			log.Printf("ALIVE: host=%s pkts=%d result=%v", r.Host, pinger.PacketsRecv, &r)
 		}
