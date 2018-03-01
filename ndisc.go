@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/template"
@@ -27,7 +28,6 @@ var (
 	debug          bool
 	unpriv         bool
 	hideDead       bool
-	workers        = 10
 	tabIndex       = map[int]*port{}
 	tabAddr        = map[string]*port{}
 	privateBlocks  []*net.IPNet
@@ -44,7 +44,7 @@ func main() {
 		return
 	}
 
-	log.Printf("%s version %s", me, version)
+	log.Printf("%s version %s runtime %s", me, version, runtime.Version())
 
 	templateFormat := defaultTemplateFormat
 	if len(os.Args) > 3 {
@@ -56,6 +56,7 @@ func main() {
 	unpriv = os.Getenv("UNPRIV") != ""
 	hideDead = os.Getenv("HIDE_DEAD") != ""
 
+	workers := 20
 	if w := os.Getenv("WORKERS"); w != "" {
 		v, errW := strconv.Atoi(w)
 		if errW != nil {
@@ -77,7 +78,7 @@ func main() {
 
 	scan(os.Args[1], os.Args[2])
 
-	spawnWorkers(workChannel)
+	spawnWorkers(workers, workChannel)
 
 	templateResult = template.Must(template.New("templateFormat").Parse(templateFormat))
 
@@ -173,7 +174,7 @@ type result struct {
 	Alive bool
 }
 
-func spawnWorkers(c <-chan result) {
+func spawnWorkers(workers int, c <-chan result) {
 	log.Printf("spawning %d workers", workers)
 
 	for i := 0; i < workers; i++ {
